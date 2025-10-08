@@ -1,56 +1,39 @@
 #!/bin/bash
 
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Este script debe ser ejecutado con privilegios de superusuario (sudo)." >&2
+  exit 1
+fi
 
 if [ "$#" -lt 2 ]; then
-    echo "Faltan argumentos. Por favor, proporciona el nombre del bridge y al menos una interfaz."
-    exit 1
+  echo "Error: Faltan parámetros." >&2
+  echo "Uso: $0 <nombre_ovs> <interfaz1> <interfaz2> ..." >&2
+  exit 1
 fi
 
-BRIDGE_NAME=$1
+OVS_BRIDGE_NAME=$1
 shift
-INTERFACES=("$@")
 
-echo "--- Iniciando configuración del switch central OVS ---"
-echo "Nombre del bridge: $BRIDGE_NAME"
-echo "Interfaces a procesar: ${INTERFACES[*]}"
-
-setup_interface() {
-    local iface=$1
-    echo "--> Procesando interfaz: $iface"
-
-    if ! ip link show $iface >/dev/null 2>&1; then
-        echo "Error: La interfaz '$iface' no se encontró. Saltando..."
-        return
-    fi
-
-    echo "Limpiando IP de la interfaz '$iface'..."
-    sudo ip addr flush dev $iface
-
-    if ! sudo ovs-vsctl list-ports $BRIDGE_NAME | grep -q "^$iface$"; then
-        echo "Añadiendo '$iface' al bridge '$BRIDGE_NAME'..."
-        sudo ovs-vsctl add-port $BRIDGE_NAME $iface
-    else
-        echo "La interfaz '$iface' ya es parte de '$BRIDGE_NAME'."
-    fi
-
-    echo "Configurando '$iface' como puerto troncal..."
-    sudo ovs-vsctl set port $iface trunks=1-4094
-
-    sudo ip link set $iface up
-}
-
-if ! sudo ovs-vsctl br-exists $BRIDGE_NAME; then
-    echo "Creando el bridge '$BRIDGE_NAME'..."
-    sudo ovs-vsctl add-br $BRIDGE_NAME
-else
-    echo "El bridge '$BRIDGE_NAME' ya existe."
-fi
-
-for iface in "${INTERFACES[@]}"; do
-    setup_interface $iface
+for iface in "$@"; do
+  if [ "$iface" == "ens3" ]; then
+    echo "ERROR CRÍTICO: Se ha intentado modificar la interfaz de gestión 'ens3'." >&2
+    echo "Esta acción está prohibida para prevenir la pérdida de conexión. Abortando." >&2
+    exit 1
+  fi
 done
 
-sudo ip link set dev $BRIDGE_NAME up
+if ovs-vsctl br-exists "$OVS_BRIDGE_NAME"; then
+  ovs-vsctl del-br "$OVS_BRIDGE_NAME"
+fi
 
-echo "--- Configuración del OFS completada ---"
-sudo ovs-vsctl show
+ovs-vsctl add-br "$OVS_BRIDGE_NAME"
+
+for iface in "$@"; do
+  ip addr flush dev "$iface"
+  ovs-vsctl add-port "$OVS_BRIDGE_NAME" "$iface"
+done
+
+ovs-vsctl show
+echo "Inicialización del OFS finalizada."
+
+exit 0

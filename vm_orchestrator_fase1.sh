@@ -1,93 +1,119 @@
 #!/bin/bash
 
-echo "===== INICIANDO DESPLIEGUE DE RED VIRTUAL ====="
+#================================================================
+# Script: vm_orchestrator_fase1.sh
+# Descripción: Orquesta la creación de la topología de la Fase 1
+#              del laboratorio. Se conecta por SSH a los nodos
+#              remotos para ejecutar los scripts de inicialización
+#              y creación de VMs.
+#
+# Ejecución: Se ejecuta desde el nodo Headnode.
+#================================================================
 
-HEADNODE="10.0.10.4"
-WORKERS=("10.0.10.1" "10.0.10.2" "10.0.10.3")
-OFS_NODE="10.0.10.5"
+# --- Sección de Configuración ---
+# MODIFICA ESTAS VARIABLES SEGÚN TU TOPOLOGÍA ASIGNADA
 
-BRIDGE_WORKER="br-local"
-BRIDGE_OFS="br-global"
+# Usuario para la conexión SSH
+SSH_USER="ubuntu"
 
-INTERFACES_OFS=("eth1" "eth2" "eth3" "eth4")
+# Direcciones IP de la red de GESTIÓN de tus nodos
+OFS_IP="10.0.10.5"
+WORKER1_IP="10.0.10.1" # server1
+WORKER2_IP="10.0.10.3" # server3
+WORKER3_IP="10.0.10.4" # server4
 
-declare -A VM_DEPLOYMENT=(
-    ["vm1_w1"]="10.0.10.1 100 5901"
-    ["vm2_w1"]="10.0.10.1 200 5902"
-    ["vm3_w1"]="10.0.10.1 300 5903"
-    ["vm1_w2"]="10.0.10.2 100 5911"
-    ["vm2_w2"]="10.0.10.2 200 5912"
-    ["vm3_w2"]="10.0.10.2 300 5913"
-    ["vm1_w3"]="10.0.10.3 100 5921"
-    ["vm2_w3"]="10.0.10.3 200 5922"
-    ["vm3_w3"]="10.0.10.3 300 5923"
-)
+# Nombres de los bridges a crear en los nodos
+OVS_WORKER_BRIDGE="br-int"
+OVS_OFS_BRIDGE="br-data"
 
-run_remote() {
-    local host="$1"
-    local cmd="$2"
-    ssh -o StrictHostKeyChecking=no root@"$host" "$cmd"
-}
+# Interfaces de la red de DATOS para cada nodo
+# Asegúrate de que no sea la interfaz de gestión (ens3 en workers)
+IFACE_WORKER1="ens4"
+IFACE_WORKER2="ens4"
+IFACE_WORKER3="ens4"
+# Para el OFS, lista todas sus interfaces de datos separadas por espacios
+IFACES_OFS="ens4 ens5 ens6 ens7"
 
-copy_file() {
-    local host="$1"
-    local source_path="$2"
-    local dest_path="$3"
-    scp -o StrictHostKeyChecking=no "$source_path" root@"$host":"$dest_path"
-}
+# Ruta donde se encuentran los scripts en los nodos remotos
+REMOTE_SCRIPT_PATH="/home/ubuntu" # Cambiar si los pusiste en otra carpeta
 
-test_all_hosts() {
-    local hosts=("$@")
-    local status=0
-    for h in "${hosts[@]}"; do
-        ping -c 1 -W 3 "$h" >/dev/null 2>&1
-        if [ $? -ne 0 ]; then
-            echo "El host $h no responde."
-            status=1
-        fi
-    done
-    return $status
-}
+# --- Fin de la Sección de Configuración ---
 
-distribute_files() {
-    local hosts=("$@")
-    for host in "${hosts[@]}"; do
-        copy_file "$host" "init_worker.sh" "/tmp/"
-        copy_file "$host" "vm_create.sh" "/tmp/"
-        copy_file "$host" "init_ofs.sh" "/tmp/"
-        run_remote "$host" "chmod +x /tmp/*.sh"
-    done
-}
 
-configure_ofs() {
-    local ifaces_str="${INTERFACES_OFS[*]}"
-    run_remote "$OFS_NODE" "/tmp/init_ofs.sh $BRIDGE_OFS $ifaces_str"
-}
+# Muestra un resumen de lo que el script va a hacer
+cat << EOF
 
-configure_workers() {
-    for worker_ip in "${WORKERS[@]}"; do
-        run_remote "$worker_ip" "/tmp/init_worker.sh $BRIDGE_WORKER eth1"
-    done
-}
+=======================================================
+      Orquestador de Topología - Fase 1
+=======================================================
+Este script configurará la red de datos y creará VMs.
+Asegúrate de que las IPs y nombres de interfaces en la
+sección de configuración son correctos.
 
-deploy_vms() {
-    for vm_id in "${!VM_DEPLOYMENT[@]}"; do
-        read -r host vlan port <<< "${VM_DEPLOYMENT[$vm_id]}"
-        vm_name=$(echo "$vm_id" | cut -d'_' -f1)
-        
-        run_remote "$host" "/tmp/vm_create.sh $vm_name $BRIDGE_WORKER $vlan $port"
-    done
-}
+Plan de ejecución:
+1. Inicializar el Switch central (OFS) en $OFS_IP.
+2. Inicializar Worker 1 en $WORKER1_IP.
+3. Inicializar Worker 2 en $WORKER2_IP.
+4. Inicializar Worker 3 en $WORKER3_IP.
+5. Crear VM 'vm1' (VLAN 100) en Worker 1.
+6. Crear VM 'vm2' (VLAN 200) en Worker 2.
+7. Crear VM 'vm3' (VLAN 100) en Worker 3.
 
-if ! test_all_hosts "${WORKERS[@]}" "$OFS_NODE"; then
-    echo "Fallo al verificar la conectividad con los hosts. Abortando."
-    exit 1
-fi
+Presiona Enter para comenzar o Ctrl+C para cancelar...
+EOF
+read
 
-distribute_files "${WORKERS[@]}" "$OFS_NODE"
-configure_ofs
-configure_workers
-sleep 10
-deploy_vms
+# --- Lógica Principal de Orquestación ---
 
-echo "===== ORQUESTACIÓN COMPLETADA ====="
+echo ""
+echo "--- [Paso 1/7] Inicializando el Switch Central (OFS) en $OFS_IP ---"
+# Se conecta al OFS y ejecuta el script de inicialización con los parámetros definidos
+ssh "$SSH_USER@$OFS_IP" "sudo $REMOTE_SCRIPT_PATH/init_ofs.sh '$OVS_OFS_BRIDGE' $IFACES_OFS"
+echo "-> OFS inicializado."
+echo ""
+
+echo "--- [Paso 2/7] Inicializando Worker 1 en $WORKER1_IP ---"
+ssh "$SSH_USER@$WORKER1_IP" "sudo $REMOTE_SCRIPT_PATH/init_worker.sh '$OVS_WORKER_BRIDGE' '$IFACE_WORKER1'"
+echo "-> Worker 1 inicializado."
+echo ""
+
+echo "--- [Paso 3/7] Inicializando Worker 2 en $WORKER2_IP ---"
+ssh "$SSH_USER@$WORKER2_IP" "sudo $REMOTE_SCRIPT_PATH/init_worker.sh '$OVS_WORKER_BRIDGE' '$IFACE_WORKER2'"
+echo "-> Worker 2 inicializado."
+echo ""
+
+echo "--- [Paso 4/7] Inicializando Worker 3 en $WORKER3_IP ---"
+ssh "$SSH_USER@$WORKER3_IP" "sudo $REMOTE_SCRIPT_PATH/init_worker.sh '$OVS_WORKER_BRIDGE' '$IFACE_WORKER3'"
+echo "-> Worker 3 inicializado."
+echo ""
+
+# Pausa para asegurar que las redes están estables antes de crear VMs
+echo "Pausa de 5 segundos..."
+sleep 5
+echo ""
+
+echo "--- [Paso 5/7] Creando VM 'vm1' en Worker 1 ---"
+# Se conecta al worker y ejecuta el script de creación de VM con sus parámetros específicos
+ssh "$SSH_USER@$WORKER1_IP" "sudo $REMOTE_SCRIPT_PATH/vm_create.sh vm1 '$OVS_WORKER_BRIDGE' 100 5901"
+echo "-> VM 'vm1' creada en Worker 1 (VLAN 100, VNC 5901)."
+echo ""
+
+echo "--- [Paso 6/7] Creando VM 'vm2' en Worker 2 ---"
+ssh "$SSH_USER@$WORKER2_IP" "sudo $REMOTE_SCRIPT_PATH/vm_create.sh vm2 '$OVS_WORKER_BRIDGE' 200 5902"
+echo "-> VM 'vm2' creada en Worker 2 (VLAN 200, VNC 5902)."
+echo ""
+
+echo "--- [Paso 7/7] Creando VM 'vm3' en Worker 3 ---"
+ssh "$SSH_USER@$WORKER3_IP" "sudo $REMOTE_SCRIPT_PATH/vm_create.sh vm3 '$OVS_WORKER_BRIDGE' 100 5903"
+echo "-> VM 'vm3' creada en Worker 3 (VLAN 100, VNC 5903)."
+echo ""
+
+echo "======================================================="
+echo "¡Orquestación de la Fase 1 completada!"
+echo "Resumen:"
+echo " - Red de datos inicializada en OFS y 3 Workers."
+echo " - VM 'vm1' y 'vm3' deberían poder comunicarse entre sí (VLAN 100)."
+echo " - VM 'vm2' está aislada en su propia red (VLAN 200)."
+echo "======================================================="
+
+exit 0
